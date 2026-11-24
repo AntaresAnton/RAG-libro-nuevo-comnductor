@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Asistente Virtual - Libro del Nuevo Conductor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;600;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <style>
+    body { font-family: "Roboto", "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+    .font-condensed { font-family: "Roboto Condensed", "Arial Narrow", "Roboto", sans-serif; }
+    .prose-chat p { margin-bottom: 0.5rem; }
+    .prose-chat p:last-child { margin-bottom: 0; }
+    .prose-chat ul, .prose-chat ol { margin-left: 1.25rem; margin-bottom: 0.5rem; list-style-type: disc; }
+    .prose-chat ol { list-style-type: decimal; }
+    .prose-chat strong { color: #1f2937; font-weight: 600; }
+    .prose-chat code { background: #f3f4f6; padding: 0.1rem 0.35rem; border-radius: 0.25rem; font-size: 0.85em; color: #c2410c; }
+    .chat-scroll::-webkit-scrollbar { width: 6px; }
+    .chat-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
+</head>
+<body class="bg-[#E9ECEF] text-[#333333] h-screen flex flex-col overflow-hidden">
+
+  <!-- Contenedor principal -->
+  <div class="flex-1 flex overflow-hidden max-w-6xl w-full mx-auto my-0 sm:my-4 sm:rounded-md sm:shadow-lg border border-gray-300 bg-white">
+
+    <!-- Panel Lateral: Documentos PDF (colapsable) -->
+    <aside id="docs-sidebar" class="w-72 border-r border-gray-200 bg-[#FAFAFA] flex flex-col shrink-0">
+      <div class="bg-[#333333] text-white px-4 py-3 flex items-center justify-between">
+        <span class="font-condensed text-sm font-bold tracking-wider uppercase">Base Documental</span>
+        <span id="doc-count" class="text-xs bg-white/15 px-2 py-0.5 rounded">0 PDFs</span>
+      </div>
+
+      <div class="p-3.5 flex-1 flex flex-col gap-3 overflow-y-auto chat-scroll">
+        <!-- Subida de PDF -->
+        <label id="drop-zone" class="flex flex-col items-center justify-center border border-dashed border-gray-300 hover:border-[#F26522] rounded bg-white p-3.5 cursor-pointer transition text-center">
+          <svg class="w-6 h-6 text-[#F26522] mb-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0l-4 4m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+          </svg>
+          <span class="text-xs font-semibold text-gray-700">Subir o arrastrar PDF</span>
+          <span class="text-[11px] text-gray-400 mt-0.5">Se guarda en /documents</span>
+          <input id="file-input" type="file" accept=".pdf,application/pdf" class="hidden" />
+        </label>
+
+        <!-- Botones de Ingesta -->
+        <div class="flex gap-2">
+          <button id="btn-ingest" onclick="runIngest(false)" class="flex-1 px-3 py-1.5 rounded bg-[#F26522] hover:bg-[#D9531E] text-white text-xs font-semibold transition disabled:opacity-50">
+            Ingerir nuevos
+          </button>
+          <button id="btn-reindex" onclick="runIngest(true)" class="px-3 py-1.5 rounded bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 text-xs font-medium transition disabled:opacity-50" title="Limpia ChromaDB y re-indexa todos los PDFs">
+            Re-indexar
+          </button>
+        </div>
+
+        <div id="ingest-feedback" class="hidden text-xs rounded p-2 border"></div>
+
+        <!-- Lista de Documentos -->
+        <div class="flex-1 flex flex-col min-h-0 pt-1">
+          <h2 class="font-condensed text-xs font-bold uppercase tracking-wider text-gray-500 mb-2">Archivos locales</h2>
+          <div id="doc-list" class="space-y-2 overflow-y-auto chat-scroll pr-0.5">
+            <p class="text-xs text-gray-400">Cargando documentos...</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Estado de Proveedores al pie del sidebar -->
+      <div class="border-t border-gray-200 bg-white p-3 space-y-1.5 text-[11px]">
+        <div class="flex items-center justify-between">
+          <span class="text-gray-500 font-medium">Chunks indexados</span>
+          <span id="badge-chunks" class="font-semibold text-gray-800">--</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-gray-500 font-medium">Ollama (Local)</span>
+          <span id="badge-ollama" class="font-semibold text-gray-500">verificando...</span>
+        </div>
+        <div class="flex items-center justify-between">
+          <span class="text-gray-500 font-medium">Together.ai (Fallback)</span>
+          <span id="badge-together" class="font-semibold text-gray-500">verificando...</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Ventana de Chat -->
+    <main class="flex-1 flex flex-col min-w-0 bg-[#F4F5F7]">
+
+      <!-- Barra superior naranja solida -->
+      <header class="bg-[#F26522] text-white px-4 py-2.5 flex items-center justify-between shadow-sm shrink-0">
+        <div class="flex items-center gap-2.5">
+          <button onclick="toggleSidebar()" class="p-1 rounded hover:bg-white/15 transition" title="Mostrar u ocultar documentos">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+            </svg>
+          </button>
+          <div class="flex items-center gap-2">
+            <span class="font-condensed font-bold tracking-wide text-sm sm:text-base uppercase">Asistente Libro del Nuevo Conductor</span>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button onclick="refreshAll()" class="font-condensed px-2.5 py-1 rounded text-xs uppercase tracking-wide bg-white/15 hover:bg-white/25 transition font-semibold" title="Actualizar estado">
+            Actualizar
+          </button>
+          <button onclick="clearChat()" class="font-condensed px-2.5 py-1 rounded text-xs uppercase tracking-wide bg-white/15 hover:bg-white/25 transition font-semibold" title="Limpiar conversacion">
+            Limpiar
+          </button>
+        </div>
+      </header>
+
+      <!-- Area de mensajes -->
+      <div id="chat-messages" class="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 chat-scroll">
+        <!-- Mensaje inicial del bot estilo tarjeta con opciones > en naranja -->
+        <div id="welcome-block" class="space-y-3">
+          <div class="flex items-end gap-2.5 max-w-xl">
+            <div class="w-8 h-8 rounded-full bg-white border border-gray-300 shadow-sm flex items-center justify-center shrink-0 text-[#F26522]">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H6a2 2 0 01-2-2v-1H3a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2zm-3 11a1.5 1.5 0 100 3 1.5 1.5 0 000-3zm6 0a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/>
+              </svg>
+            </div>
+            <div class="bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-2.5 text-sm text-gray-800">
+              ¡Hola! Soy tu asistente de consultas documentales.
+            </div>
+          </div>
+
+          <div class="flex items-end gap-2.5 max-w-xl">
+            <div class="w-8 h-8 shrink-0"></div>
+            <div class="bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3 text-sm text-gray-800 w-full">
+              <p class="mb-2.5 text-gray-700">Por favor, selecciona una de las opciones o escribe tu pregunta abajo:</p>
+              <ul class="space-y-1.5 text-[13px]">
+                <li>
+                  <button onclick="askSuggestion('¿Cuales son los limites de velocidad en zona urbana y rural?')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
+                    <span>&gt;</span>
+                    <span>Límites de velocidad en zona urbana y rural</span>
+                  </button>
+                </li>
+                <li>
+                  <button onclick="askSuggestion('¿Que distancia de seguridad se debe mantener al conducir?')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
+                    <span>&gt;</span>
+                    <span>Distancia de seguridad entre vehículos</span>
+                  </button>
+                </li>
+                <li>
+                  <button onclick="askSuggestion('¿Que documentos son obligatorios para conducir?')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
+                    <span>&gt;</span>
+                    <span>Documentos obligatorios para circular</span>
+                  </button>
+                </li>
+                <li>
+                  <button onclick="askSuggestion('¿Cuales son las sanciones por conducir bajo los efectos del alcohol?')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
+                    <span>&gt;</span>
+                    <span>Normativa y sanciones sobre alcohol al conducir</span>
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Barra inferior de entrada (icono auricular naranja | input | flecha naranja) -->
+      <form id="ask-form" class="bg-white border-t border-gray-300 px-3 py-2.5 flex items-center gap-2.5 shrink-0">
+        <!-- Icono soporte/auricular naranja -->
+        <div class="w-8 h-8 rounded-full bg-[#F26522] text-white flex items-center justify-center shrink-0" title="Asistente Virtual">
+          <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 1a9 9 0 00-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7a9 9 0 00-9-9z"/>
+          </svg>
+        </div>
+
+        <input
+          id="question-input"
+          type="text"
+          placeholder="Escribe tu pregunta..."
+          class="flex-1 bg-white border border-gray-300 focus:border-[#F26522] focus:outline-none rounded px-3 py-2 text-sm text-gray-800 placeholder-gray-400"
+          autocomplete="off"
+        />
+
+        <button
+          id="btn-send"
+          type="submit"
+          class="p-2 text-[#F26522] hover:text-[#C84A14] transition disabled:opacity-40"
+          title="Enviar pregunta"
+        >
+          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+          </svg>
+        </button>
+      </form>
+    </main>
+
+  </div>
+
+  <script>
+    const chatMessages = document.getElementById("chat-messages");
+    const questionInput = document.getElementById("question-input");
+    const btnSend = document.getElementById("btn-send");
+    const fileInput = document.getElementById("file-input");
+    const dropZone = document.getElementById("drop-zone");
+    const sidebar = document.getElementById("docs-sidebar");
+
+    function escapeHtml(text) {
+      const div = document.createElement("div");
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function toggleSidebar() {
+      sidebar.classList.toggle("hidden");
+    }
+
+    function clearChat() {
+      const welcome = document.getElementById("welcome-block");
+      chatMessages.innerHTML = "";
+      if (welcome) chatMessages.appendChild(welcome);
+    }
+
+    function askSuggestion(text) {
+      questionInput.value = text;
+      document.getElementById("ask-form").dispatchEvent(new Event("submit"));
+    }
+
+    async function loadHealth() {
+      try {
+        const res = await fetch("/api/health");
+        const data = await res.json();
+        document.getElementById("badge-chunks").textContent = data.total_chunks;
+
+        const ollama = data.providers?.ollama;
+        const badgeOllama = document.getElementById("badge-ollama");
+        if (ollama?.available) {
+          const ready = ollama.chat_model_ready && ollama.embedding_model_ready;
+          badgeOllama.className = ready ? "font-semibold text-emerald-700" : "font-semibold text-amber-600";
+          badgeOllama.textContent = ready ? `Activo (${ollama.chat_model})` : "Faltan modelos";
+        } else {
+          badgeOllama.className = "font-semibold text-rose-600";
+          badgeOllama.textContent = "Apagado";
+        }
+
+        const together = data.providers?.together;
+        const badgeTogether = document.getElementById("badge-together");
+        if (!together) {
+          badgeTogether.className = "font-semibold text-gray-400";
+          badgeTogether.textContent = "Deshabilitado";
+        } else if (together.available) {
+          badgeTogether.className = "font-semibold text-emerald-700";
+          badgeTogether.textContent = "Listo";
+        } else if (!together.configured) {
+          badgeTogether.className = "font-semibold text-gray-400";
+          badgeTogether.textContent = "Sin API key";
+        } else {
+          badgeTogether.className = "font-semibold text-rose-600";
+          badgeTogether.textContent = "Error";
+        }
+      } catch (err) {
+        console.error("Error consultando /api/health:", err);
+      }
+    }
+
+    async function loadDocuments() {
+      try {
+        const res = await fetch("/api/documents");
+        const data = await res.json();
+        const list = document.getElementById("doc-list");
+        document.getElementById("doc-count").textContent = `${data.documents.length} PDFs`;
+        document.getElementById("badge-chunks").textContent = data.total_chunks;
+
+        if (data.documents.length === 0) {
+          list.innerHTML = `<p class="text-xs text-gray-400">No hay PDFs en /documents.</p>`;
+          return;
+        }
+
+        list.innerHTML = data.documents.map(doc => {
+          const sizeKb = (doc.size_bytes / 1024).toFixed(0);
+          const statusBadge = doc.indexed
+            ? `<span class="text-[11px] text-emerald-700 font-medium">Indexado · ${doc.chunk_count} chunks</span>`
+            : `<span class="text-[11px] text-[#D9531E] font-medium">Pendiente de ingesta</span>`;
+          return `
+            <div class="p-2.5 rounded bg-white border border-gray-200 flex items-start justify-between gap-2 shadow-xs">
+              <div class="min-w-0">
+                <p class="text-xs font-semibold text-gray-800 truncate" title="${escapeHtml(doc.name)}">${escapeHtml(doc.name)}</p>
+                <div class="flex items-center gap-2 mt-0.5">
+                  <span class="text-[11px] text-gray-400">${sizeKb} KB</span>
+                  ${statusBadge}
+                </div>
+              </div>
+              <button onclick="deleteDocument('${encodeURIComponent(doc.name)}')" class="text-xs text-gray-400 hover:text-rose-600 px-1" title="Eliminar PDF">
+                ✕
+              </button>
+            </div>
+          `;
+        }).join("");
+      } catch (err) {
+        console.error("Error cargando documentos:", err);
+      }
+    }
+
+    async function uploadFile(file) {
+      if (!file || !file.name.toLowerCase().endsWith(".pdf")) {
+        showFeedback("Solo se permiten archivos PDF.", true);
+        return;
+      }
+      const formData = new FormData();
+      formData.append("file", file);
+      showFeedback(`Subiendo ${file.name}...`, false);
+
+      try {
+        const res = await fetch("/api/documents/upload", { method: "POST", body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Error al subir archivo");
+        showFeedback(`PDF subido: ${data.filename}. Presiona "Ingerir nuevos".`, false);
+        await loadDocuments();
+      } catch (err) {
+        showFeedback(err.message, true);
+      }
+    }
+
+    async function deleteDocument(encodedName) {
+      const name = decodeURIComponent(encodedName);
+      if (!confirm(`¿Eliminar "${name}" y sus chunks indexados?`)) return;
+      await fetch(`/api/documents/${encodedName}`, { method: "DELETE" });
+      await loadDocuments();
+    }
+
+    async function runIngest(reindex) {
+      const btnIngest = document.getElementById("btn-ingest");
+      const btnReindex = document.getElementById("btn-reindex");
+      btnIngest.disabled = true;
+      btnReindex.disabled = true;
+      showFeedback(reindex ? "Re-indexando toda la coleccion..." : "Ingestando documentos nuevos...", false);
+
+      try {
+        const res = await fetch("/api/ingest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reindex }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Error en ingesta");
+
+        const msg = `Procesados: ${data.files_processed} | Omitidos: ${data.files_skipped} | Chunks nuevos: ${data.chunks_upserted}`;
+        showFeedback(msg, data.errors?.length > 0);
+        await refreshAll();
+      } catch (err) {
+        showFeedback(err.message, true);
+      } finally {
+        btnIngest.disabled = false;
+        btnReindex.disabled = false;
+      }
+    }
+
+    function showFeedback(message, isError) {
+      const box = document.getElementById("ingest-feedback");
+      box.classList.remove("hidden");
+      box.className = isError
+        ? "text-xs rounded p-2 border bg-rose-50 border-rose-200 text-rose-700"
+        : "text-xs rounded p-2 border bg-emerald-50 border-emerald-200 text-emerald-700";
+      box.textContent = message;
+    }
+
+    function appendUserMessage(text) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "flex justify-end";
+      wrapper.innerHTML = `
+        <div class="bg-[#F4BC82] text-[#2D2D2D] rounded-lg rounded-br-none px-4 py-2.5 text-sm max-w-lg shadow-sm font-normal">
+          ${escapeHtml(text)}
+        </div>
+      `;
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function createAssistantMessage() {
+      const wrapper = document.createElement("div");
+      wrapper.className = "flex items-end gap-2.5 max-w-2xl";
+      wrapper.innerHTML = `
+        <div class="w-8 h-8 rounded-full bg-white border border-gray-300 shadow-sm flex items-center justify-center shrink-0 text-[#F26522]">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 2a2 2 0 012 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 017 7h1a1 1 0 011 1v3a1 1 0 01-1 1h-1v1a2 2 0 01-2 2H6a2 2 0 01-2-2v-1H3a1 1 0 01-1-1v-3a1 1 0 011-1h1a7 7 0 017-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 012-2zm-3 11a1.5 1.5 0 100 3 1.5 1.5 0 000-3zm6 0a1.5 1.5 0 100 3 1.5 1.5 0 000-3z"/>
+          </svg>
+        </div>
+        <div class="bg-white border border-gray-200 rounded-lg shadow-sm px-4 py-3 text-sm text-gray-800 flex-1 min-w-0">
+          <div class="prose-chat answer-body leading-relaxed">
+            <span class="text-gray-400 italic">Buscando en los documentos...</span>
+          </div>
+          <div class="citations-box mt-3 pt-2.5 border-t border-gray-100 hidden">
+            <p class="text-[11px] font-semibold text-gray-500 mb-1.5">Fuentes consultadas:</p>
+            <div class="citations-list space-y-1"></div>
+          </div>
+          <div class="mt-2 flex justify-end">
+            <span class="provider-badge text-[10px] px-2 py-0.5 rounded bg-gray-100 text-gray-500">procesando...</span>
+          </div>
+        </div>
+      `;
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return {
+        body: wrapper.querySelector(".answer-body"),
+        badge: wrapper.querySelector(".provider-badge"),
+        citationsBox: wrapper.querySelector(".citations-box"),
+        citationsList: wrapper.querySelector(".citations-list"),
+      };
+    }
+
+    function renderCitations(ui, citations) {
+      if (!citations || citations.length === 0) return;
+      ui.citationsBox.classList.remove("hidden");
+      ui.citationsList.innerHTML = citations.map(c => {
+        const scorePct = c.score != null ? ` (${(c.score * 100).toFixed(0)}%)` : "";
+        return `
+          <details class="text-xs">
+            <summary class="cursor-pointer text-[#D9531E] hover:underline font-medium select-none list-none">
+              &gt; ${escapeHtml(c.source)} — Pag. ${c.page}${scorePct}
+            </summary>
+            <p class="mt-1 mb-1.5 pl-3 border-l-2 border-[#F26522]/40 text-gray-600 whitespace-pre-wrap text-[12px] leading-relaxed">
+              ${escapeHtml(c.excerpt)}
+            </p>
+          </details>
+        `;
+      }).join("");
+    }
+
+    document.getElementById("ask-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const question = questionInput.value.trim();
+      if (!question) return;
+
+      questionInput.value = "";
+      btnSend.disabled = true;
+      appendUserMessage(question);
+      const ui = createAssistantMessage();
+
+      let fullText = "";
+      try {
+        const res = await fetch("/api/ask/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.detail || "Error consultando el servidor");
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const block of lines) {
+            if (!block.startsWith("data: ")) continue;
+            const event = JSON.parse(block.slice(6));
+
+            if (event.type === "citations") {
+              renderCitations(ui, event.citations);
+            } else if (event.type === "token") {
+              fullText += event.content;
+              ui.body.innerHTML = DOMPurify.sanitize(marked.parse(fullText));
+              chatMessages.scrollTop = chatMessages.scrollHeight;
+            } else if (event.type === "done") {
+              const fbText = event.fallback ? " (fallback)" : "";
+              ui.badge.textContent = `${event.provider}${fbText}`;
+              if (event.fallback) {
+                ui.badge.className = "provider-badge text-[10px] px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium";
+              }
+            } else if (event.type === "error") {
+              throw new Error(event.detail);
+            }
+          }
+        }
+      } catch (err) {
+        ui.body.innerHTML = `<span class="text-rose-600 font-medium">${escapeHtml(err.message)}</span>`;
+        ui.badge.textContent = "error";
+      } finally {
+        btnSend.disabled = false;
+        questionInput.focus();
+      }
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      if (e.target.files[0]) uploadFile(e.target.files[0]);
+      fileInput.value = "";
+    });
+
+    dropZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropZone.classList.add("border-[#F26522]");
+    });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("border-[#F26522]"));
+    dropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.classList.remove("border-[#F26522]");
+      if (e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]);
+    });
+
+    async function refreshAll() {
+      await Promise.all([loadHealth(), loadDocuments()]);
+    }
+
+    refreshAll();
+  </script>
+</body>
+</html>

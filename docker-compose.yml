@@ -1,0 +1,16 @@
+services:
+  rag-conductor:
+    build: .
+    container_name: rag-conductor
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./documents:/app/documents
+      - ./chroma_db:/app/chroma_db
+    restart: unless-stopped
