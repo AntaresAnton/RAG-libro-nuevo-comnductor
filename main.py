@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from src.application.agent_use_case import AgentUseCase
 from src.application.ask_use_case import AskUseCase
 from src.application.ingest_use_case import IngestUseCase
 from src.config import Settings
@@ -45,6 +46,7 @@ class AppContainer:
     document_loader: DocumentLoaderPort
     ingest_use_case: IngestUseCase
     ask_use_case: AskUseCase
+    agent_use_case: AgentUseCase
     ingest_lock: threading.Lock
 
 
@@ -77,6 +79,7 @@ def build_llm_adapter(cfg: Settings) -> FallbackLLMAdapter:
     return FallbackLLMAdapter(
         providers=providers,
         embedding_fallback_enabled=cfg.embedding_fallback_enabled,
+        embedding_provider=registry[cfg.embedding_provider],
     )
 
 
@@ -108,6 +111,12 @@ def build_container(cfg: Settings) -> AppContainer:
         top_k=cfg.top_k,
         min_similarity_score=cfg.min_similarity_score,
     )
+    agent_use_case = AgentUseCase(
+        llm=llm_adapter,
+        vector_store=vector_store,
+        default_top_k=cfg.top_k,
+        min_similarity_score=cfg.min_similarity_score,
+    )
     return AppContainer(
         settings=cfg,
         documents_dir=documents_dir,
@@ -116,6 +125,7 @@ def build_container(cfg: Settings) -> AppContainer:
         document_loader=document_loader,
         ingest_use_case=ingest_use_case,
         ask_use_case=ask_use_case,
+        agent_use_case=agent_use_case,
         ingest_lock=threading.Lock(),
     )
 
@@ -126,6 +136,16 @@ class IngestRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
+
+
+class AgentMessage(BaseModel):
+    role: str
+    content: str
+
+
+class AgentRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    history: list[AgentMessage] = Field(default_factory=list)
 
 
 def create_app(
@@ -325,6 +345,37 @@ def create_app(
                 yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)}, ensure_ascii=False)}\n\n"
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Error en stream SSE: %s", exc)
+                yield f"data: {json.dumps({'type': 'error', 'detail': 'Error interno durante el streaming.'}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    @application.post("/api/agent")
+    def agent_chat(request: Request, payload: AgentRequest):
+        c = get_c(request)
+        try:
+            history = [m.model_dump() for m in payload.history]
+            response = c.agent_use_case.execute(payload.message, history=history)
+            return asdict(response)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except LLMProviderError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @application.post("/api/agent/stream")
+    def agent_chat_stream(request: Request, payload: AgentRequest):
+        c = get_c(request)
+        history = [m.model_dump() for m in payload.history]
+
+        def event_generator():
+            try:
+                for event in c.agent_use_case.execute_stream(payload.message, history=history):
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except ValueError as exc:
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)}, ensure_ascii=False)}\n\n"
+            except LLMProviderError as exc:
+                yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)}, ensure_ascii=False)}\n\n"
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Error en stream SSE del agente: %s", exc)
                 yield f"data: {json.dumps({'type': 'error', 'detail': 'Error interno durante el streaming.'}, ensure_ascii=False)}\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")

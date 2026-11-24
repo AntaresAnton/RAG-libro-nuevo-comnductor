@@ -47,16 +47,21 @@ class ChromaVectorStoreAdapter(VectorStorePort):
         query_embedding: list[float],
         top_k: int = 5,
         min_score: float = 0.0,
+        source_filter: str | None = None,
     ) -> list[DocumentChunk]:
         total = self.count()
         if total == 0:
             return []
 
-        results = self._collection.query(
-            query_embeddings=[query_embedding],
-            n_results=min(top_k, total),
-            include=["documents", "metadatas", "distances"],
-        )
+        query_kwargs: dict = {
+            "query_embeddings": [query_embedding],
+            "n_results": min(top_k, total),
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if source_filter:
+            query_kwargs["where"] = {"source": source_filter}
+
+        results = self._collection.query(**query_kwargs)
 
         ids = results.get("ids", [[]])[0]
         documents = results.get("documents", [[]])[0]
@@ -107,3 +112,27 @@ class ChromaVectorStoreAdapter(VectorStorePort):
 
     def delete_by_source(self, source: str) -> None:
         self._collection.delete(where={"source": source})
+
+    def get_page_chunks(self, source: str, page: int) -> list[DocumentChunk]:
+        if self.count() == 0:
+            return []
+        data = self._collection.get(
+            where={"$and": [{"source": source}, {"page": page}]},
+            include=["documents", "metadatas"],
+        )
+        ids = data.get("ids", []) or []
+        documents = data.get("documents", []) or []
+        metadatas = data.get("metadatas", []) or []
+        chunks = [
+            DocumentChunk(
+                id=cid,
+                content=doc,
+                source=str(meta.get("source", source)),
+                page=int(meta.get("page", page)),
+                file_hash=str(meta.get("file_hash", "")),
+                score=1.0,
+            )
+            for cid, doc, meta in zip(ids, documents, metadatas)
+        ]
+        chunks.sort(key=lambda c: c.id)
+        return chunks

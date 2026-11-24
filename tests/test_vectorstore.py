@@ -48,3 +48,20 @@ def test_chroma_adapter_upsert_search_and_delete(tmp_path: Path):
 
     store.clear()
     assert store.count() == 0
+
+
+def test_chroma_adapter_source_filter_and_get_page_chunks(tmp_path: Path):
+    store = ChromaVectorStoreAdapter(persist_dir=tmp_path / "chroma_pages", collection_name="test_pages")
+    chunks = [
+        DocumentChunk(id="a::p10::c1", content="Parte 2", source="a.pdf", page=10, file_hash="h1"),
+        DocumentChunk(id="a::p10::c0", content="Parte 1", source="a.pdf", page=10, file_hash="h1"),
+        DocumentChunk(id="b::p10::c0", content="Otro doc", source="b.pdf", page=10, file_hash="h2"),
+    ]
+    store.upsert(chunks, [[1.0, 0.0], [0.9, 0.1], [0.95, 0.05]])
+
+    filtered = store.search(query_embedding=[1.0, 0.0], top_k=5, min_score=0.0, source_filter="b.pdf")
+    assert len(filtered) == 1
+    assert filtered[0].source == "b.pdf"
+
+    page_chunks = store.get_page_chunks("a.pdf", 10)
+    assert [c.id for c in page_chunks] == ["a::p10::c0", "a::p10::c1"]

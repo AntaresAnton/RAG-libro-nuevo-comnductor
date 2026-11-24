@@ -4,11 +4,12 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from main import AppContainer, create_app
+from src.application.agent_use_case import AgentUseCase
 from src.application.ask_use_case import AskUseCase
 from src.application.ingest_use_case import IngestUseCase
 from src.config import Settings
 from src.domain.models import DocumentChunk
-from tests.test_use_cases import FakeLLM, FakeLoader, FakeVectorStore
+from tests.test_use_cases import FakeLLM, FakeLoader, FakeToolLLM, FakeVectorStore
 
 
 def _make_test_client(tmp_path: Path, max_upload_mb: int = 1) -> tuple[TestClient, AppContainer]:
@@ -40,6 +41,7 @@ def _make_test_client(tmp_path: Path, max_upload_mb: int = 1) -> tuple[TestClien
         document_loader=loader,
         ingest_use_case=IngestUseCase(loader, llm, store, docs_dir),
         ask_use_case=AskUseCase(llm, store, top_k=4, min_similarity_score=0.3),
+        agent_use_case=AgentUseCase(llm, store, default_top_k=4, min_similarity_score=0.3),
         ingest_lock=threading.Lock(),
     )
     app = create_app(settings=settings, container=container)
@@ -130,5 +132,38 @@ def test_ask_and_ask_stream(tmp_path: Path):
         assert stream_res.status_code == 200
         text = stream_res.text
         assert '"type": "citations"' in text
+
+
+def test_agent_and_agent_stream(tmp_path: Path):
+    client, container = _make_test_client(tmp_path)
+    container.agent_use_case = AgentUseCase(
+        llm=FakeToolLLM(),
+        vector_store=container.vector_store,
+        default_top_k=4,
+        min_similarity_score=0.3,
+    )
+    with client:
+        res = client.post("/api/agent", json={"message": "¿Velocidad maxima?", "history": []})
+        assert res.status_code == 200
+        body = res.json()
+        assert body["provider_used"] == "together"
+        assert "página 12" in body["answer"]
+        assert len(body["citations"]) == 1
+
+        container.agent_use_case = AgentUseCase(
+            llm=FakeToolLLM(),
+            vector_store=container.vector_store,
+            default_top_k=4,
+            min_similarity_score=0.3,
+        )
+        stream_res = client.post(
+            "/api/agent/stream",
+            json={"message": "¿Velocidad maxima?", "history": []},
+        )
+        assert stream_res.status_code == 200
+        text = stream_res.text
+        assert '"type": "tool"' in text
+        assert '"type": "citations"' in text
+        assert '"type": "done"' in text
         assert '"type": "token"' in text
         assert '"type": "done"' in text

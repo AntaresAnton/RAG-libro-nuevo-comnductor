@@ -54,6 +54,24 @@ class LLMPort(ABC):
     def health_check(self) -> dict[str, dict]:
         """Verifica el estado de disponibilidad de los proveedores LLM."""
 
+    def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+    ) -> tuple[dict, str, bool]:
+        """Ejecuta un turno de chat con soporte de tool calling.
+
+        Retorna (assistant_message_dict, provider_name, fallback_used).
+        """
+        raise NotImplementedError("Este proveedor no implementa tool calling.")
+
+    def generate_stream_messages(
+        self,
+        messages: list[dict],
+    ) -> Iterator[tuple[str, str, bool]]:
+        """Genera una respuesta en streaming a partir de una lista de mensajes."""
+        raise NotImplementedError("Este proveedor no implementa streaming de mensajes.")
+
 
 class VectorStorePort(ABC):
     """Puerto para almacenamiento y busqueda vectorial."""
@@ -68,8 +86,13 @@ class VectorStorePort(ABC):
         query_embedding: list[float],
         top_k: int = 5,
         min_score: float = 0.0,
+        source_filter: str | None = None,
     ) -> list[DocumentChunk]:
-        """Busca los chunks mas similares filtrando por min_score (0..1)."""
+        """Busca los chunks mas similares filtrando por min_score (0..1) y fuente opcional."""
+
+    def get_page_chunks(self, source: str, page: int) -> list[DocumentChunk]:
+        """Retorna todos los chunks de una pagina especifica de un documento."""
+        return []
 
     @abstractmethod
     def clear(self) -> None:

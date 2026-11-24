@@ -101,7 +101,12 @@ class TogetherAdapter(LLMPort):
         prompt: str,
         system_prompt: str = "",
     ) -> Iterator[tuple[str, str, bool]]:
-        messages = self._build_messages(prompt, system_prompt)
+        yield from self.generate_stream_messages(self._build_messages(prompt, system_prompt))
+
+    def generate_stream_messages(
+        self,
+        messages: list[dict],
+    ) -> Iterator[tuple[str, str, bool]]:
         try:
             headers = self._headers()
             with self._client.stream(
@@ -130,6 +135,45 @@ class TogetherAdapter(LLMPort):
             raise
         except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as exc:
             raise LLMProviderError(self.PROVIDER_NAME, f"Error en stream: {exc}") from exc
+
+    def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+    ) -> tuple[dict, str, bool]:
+        try:
+            headers = self._headers()
+            body: dict = {
+                "model": self._chat_model,
+                "messages": messages,
+                "temperature": 0.2,
+                "stream": False,
+            }
+            if tools:
+                body["tools"] = tools
+                body["tool_choice"] = "auto"
+
+            response = request_with_retry(
+                lambda: self._client.post(
+                    f"{self._base_url}/chat/completions",
+                    headers=headers,
+                    json=body,
+                ),
+                max_retries=self._max_retries,
+            )
+            data = response.json()
+            raw_msg = data["choices"][0]["message"]
+            clean_msg: dict = {
+                "role": raw_msg.get("role", "assistant"),
+                "content": raw_msg.get("content") or "",
+            }
+            if raw_msg.get("tool_calls"):
+                clean_msg["tool_calls"] = raw_msg["tool_calls"]
+            return clean_msg, self.PROVIDER_NAME, False
+        except LLMProviderError:
+            raise
+        except (httpx.HTTPError, KeyError, IndexError) as exc:
+            raise LLMProviderError(self.PROVIDER_NAME, f"Error en tool-calling: {exc}") from exc
 
     def health_check(self) -> dict[str, dict]:
         if not self._api_key:

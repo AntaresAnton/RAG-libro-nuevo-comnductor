@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     min_similarity_score: float = Field(default=0.30, ge=0.0, le=1.0)
 
     # Orquestacion de Proveedores y Fallbacks
-    llm_primary: Literal["ollama", "together"] = "ollama"
+    llm_primary: Literal["ollama", "together"] = "together"
     llm_fallback_enabled: bool = True
+    embedding_provider: Literal["ollama", "together"] = "ollama"
     embedding_fallback_enabled: bool = False
     llm_timeout_seconds: float = Field(default=60.0, gt=1.0)
     llm_max_retries: int = Field(default=2, ge=0, le=5)
@@ -45,5 +46,5 @@ class Settings(BaseSettings):
     # Together.ai
     together_api_key: str = ""
     together_base_url: str = "https://api.together.xyz/v1"
-    together_chat_model: str = "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"
+    together_chat_model: str = "Qwen/Qwen3.5-9B"
     together_embedding_model: str = "togethercomputer/m2-bert-80M-8k-retrieval"

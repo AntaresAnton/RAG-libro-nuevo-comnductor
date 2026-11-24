@@ -149,9 +149,21 @@
                   </button>
                 </li>
                 <li>
-                  <button onclick="askSuggestion('¿Cuales son las sanciones por conducir bajo los efectos del alcohol?')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
+                  <button onclick="askSuggestion('¿Cuáles son las sanciones por conducir bajo los efectos del alcohol?')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
                     <span>&gt;</span>
                     <span>Normativa y sanciones sobre alcohol al conducir</span>
+                  </button>
+                </li>
+                <li>
+                  <button onclick="askSuggestion('Hazme un quiz de 3 preguntas de examen sobre límites de velocidad y distancia de seguridad')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
+                    <span>&gt;</span>
+                    <span>Simular un mini examen de 3 preguntas sobre velocidad y seguridad</span>
+                  </button>
+                </li>
+                <li>
+                  <button onclick="askSuggestion('Compara las velocidades máximas en zona urbana y rural, e indícame en qué páginas aparece')" class="text-left text-[#D9531E] hover:underline font-medium flex items-start gap-1.5">
+                    <span>&gt;</span>
+                    <span>Comparar límites de velocidad en zona urbana y rural</span>
                   </button>
                 </li>
               </ul>
@@ -199,6 +211,7 @@
     const fileInput = document.getElementById("file-input");
     const dropZone = document.getElementById("drop-zone");
     const sidebar = document.getElementById("docs-sidebar");
+    let chatHistory = [];
 
     function escapeHtml(text) {
       const div = document.createElement("div");
@@ -213,6 +226,7 @@
     function clearChat() {
       const welcome = document.getElementById("welcome-block");
       chatMessages.innerHTML = "";
+      chatHistory = [];
       if (welcome) chatMessages.appendChild(welcome);
     }
 
@@ -433,10 +447,10 @@
 
       let fullText = "";
       try {
-        const res = await fetch("/api/ask/stream", {
+        const res = await fetch("/api/agent/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ message: question, history: chatHistory }),
         });
         if (!res.ok) {
           const errData = await res.json();
@@ -459,7 +473,17 @@
             if (!block.startsWith("data: ")) continue;
             const event = JSON.parse(block.slice(6));
 
-            if (event.type === "citations") {
+            if (event.type === "tool") {
+              const labelMap = {
+                buscar_en_documentos: `Buscando: "${event.args?.query || ""}"`,
+                leer_pagina: `Leyendo página ${event.args?.pagina || ""}...`,
+                listar_documentos: "Consultando documentos disponibles...",
+                comparar_temas: `Comparando "${event.args?.tema_a || ""}" vs "${event.args?.tema_b || ""}"`,
+              };
+              const statusText = labelMap[event.name] || `Ejecutando ${event.name}...`;
+              ui.body.innerHTML = `<span class="text-gray-500 italic text-xs">${escapeHtml(statusText)}</span>`;
+              chatMessages.scrollTop = chatMessages.scrollHeight;
+            } else if (event.type === "citations") {
               renderCitations(ui, event.citations);
             } else if (event.type === "token") {
               fullText += event.content;
@@ -470,6 +494,10 @@
               ui.badge.textContent = `${event.provider}${fbText}`;
               if (event.fallback) {
                 ui.badge.className = "provider-badge text-[10px] px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-medium";
+              }
+              if (fullText) {
+                chatHistory.push({ role: "user", content: question });
+                chatHistory.push({ role: "assistant", content: fullText });
               }
             } else if (event.type === "error") {
               throw new Error(event.detail);

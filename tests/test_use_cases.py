@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from src.application.agent_use_case import AgentUseCase
 from src.application.ask_use_case import AskUseCase
 from src.application.ingest_use_case import IngestUseCase
 from src.domain.models import DocumentChunk, LLMResult
@@ -58,8 +59,16 @@ class FakeVectorStore(VectorStorePort):
         query_embedding: list[float],
         top_k: int = 5,
         min_score: float = 0.0,
+        source_filter: str | None = None,
     ) -> list[DocumentChunk]:
-        return [c for c in self.chunks if (c.score or 0.0) >= min_score][:top_k]
+        return [
+            c
+            for c in self.chunks
+            if (c.score or 0.0) >= min_score and (source_filter is None or c.source == source_filter)
+        ][:top_k]
+
+    def get_page_chunks(self, source: str, page: int) -> list[DocumentChunk]:
+        return [c for c in self.chunks if c.source == source and c.page == page]
 
     def clear(self) -> None:
         self.chunks.clear()
@@ -219,3 +228,101 @@ def test_ingest_use_case_replaces_updated_source_and_skips_unchanged():
     assert result.files_skipped == 1
     assert result.chunks_upserted == 1
     assert store.deleted_sources == ["libro.pdf"]
+
+
+class FakeToolLLM(FakeLLM):
+    def __init__(self) -> None:
+        super().__init__("together")
+        self.calls = 0
+
+    def chat_with_tools(self, messages: list[dict], tools: list[dict]) -> tuple[dict, str, bool]:
+        self.calls += 1
+        if self.calls == 1:
+            return (
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "buscar_en_documentos",
+                                "arguments": '{"query": "velocidad urbana"}',
+                            },
+                        }
+                    ],
+                },
+                "together",
+                False,
+            )
+        return (
+            {
+                "role": "assistant",
+                "content": "En la página 12 se indica que la velocidad máxima urbana es 50 km/h.",
+            },
+            "together",
+            False,
+        )
+
+
+def test_agent_use_case_runs_tool_call_and_returns_citations():
+    chunk = DocumentChunk(
+        id="1",
+        content="En zona urbana la velocidad maxima es 50 km/h.",
+        source="libro.pdf",
+        page=12,
+        score=0.91,
+    )
+    agent = AgentUseCase(
+        llm=FakeToolLLM(),
+        vector_store=FakeVectorStore([chunk]),
+        min_similarity_score=0.30,
+    )
+    res = agent.execute("¿Cuál es la velocidad máxima urbana?")
+    assert res.provider_used == "together"
+    assert "página 12" in res.answer
+    assert len(res.citations) == 1
+    assert res.citations[0].page == 12
+
+
+def test_agent_use_case_tools_and_history():
+    chunks = [
+        DocumentChunk(
+            id="libro.pdf::p50::c0",
+            content="Sanciones por alcoholemia entre 0,31 y 0,79.",
+            source="libro.pdf",
+            page=50,
+            score=0.88,
+        ),
+        DocumentChunk(
+            id="libro.pdf::p53::c0",
+            content="Estado de ebriedad: 0,80 o más gramos por mil.",
+            source="libro.pdf",
+            page=53,
+            score=0.85,
+        ),
+    ]
+    store = FakeVectorStore(chunks)
+    agent = AgentUseCase(llm=FakeToolLLM(), vector_store=store, min_similarity_score=0.30)
+
+    out_list, _ = agent._run_tool("listar_documentos", {})
+    assert "libro.pdf" in out_list
+
+    out_page, page_chunks = agent._run_tool("leer_pagina", {"documento": "libro.pdf", "pagina": 53})
+    assert "Estado de ebriedad" in out_page
+    assert len(page_chunks) == 1
+
+    out_cmp, cmp_chunks = agent._run_tool(
+        "comparar_temas",
+        {"tema_a": "alcoholemia", "tema_b": "ebriedad"},
+    )
+    assert "TEMA A" in out_cmp and "TEMA B" in out_cmp
+    assert len(cmp_chunks) >= 2
+
+    msgs = agent._build_messages(
+        "¿Y en qué página estaba?",
+        history=[{"role": "user", "content": "Hola"}, {"role": "assistant", "content": "Hola, dime."}],
+    )
+    assert len(msgs) == 4
+    assert msgs[1]["content"] == "Hola"
